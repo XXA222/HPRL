@@ -1,0 +1,4 @@
+# HPRL adds no independent dependency version authority.
+# It reuses the project Torch dependency from requirements-freqai-rl.txt.
+# CPU and CUDA execution are selected at runtime through HPRL configuration.
+# CUDA mode requires a CUDA-enabled build of the project-pinned Torch version.

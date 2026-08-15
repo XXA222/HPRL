@@ -1,0 +1,8 @@
+# Hedge ML/RL runtime add-on dependencies only.
+# IMPORTANT: Do not include requirements-freqai-rl.txt here because it recursively
+# installs the full Freqtrade dependency stack and can downgrade a working venv.
+gymnasium==1.3.0
+stable-baselines3==2.9.0
+sb3-contrib==2.9.0
+# Torch is installed by the Windows installer only when it is actually missing,
+# so an existing CUDA-enabled torch build is preserved.

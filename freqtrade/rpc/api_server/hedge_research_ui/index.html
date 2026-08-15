@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Freqtrade Hedge Research</title>
+  <link rel="stylesheet" href="/hedge-research-dashboard/assets/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Freqtrade Hedge Research</strong>
+      <span>Backtest · Optimization · ML · RL · Local Executor</span>
+    </div>
+    <div class="auth">
+      <input id="user" autocomplete="username" placeholder="API 用户">
+      <input id="password" type="password" autocomplete="current-password" placeholder="密码">
+      <button id="connect">连接</button>
+    </div>
+  </header>
+  <main>
+    <section id="cards" class="cards"></section>
+
+    <section class="panel toolbar">
+      <label>类型
+        <select id="kindFilter">
+          <option value="">全部</option>
+          <option>BACKTEST</option><option>OPTIMIZATION</option>
+          <option>ML_TRAIN</option><option>ML_EVAL</option>
+          <option>RL_TRAIN</option><option>RL_EVAL</option>
+        </select>
+      </label>
+      <label>状态
+        <select id="stateFilter">
+          <option value="">全部</option><option>QUEUED</option><option>RUNNING</option><option>PAUSED</option>
+          <option>SUCCEEDED</option><option>FAILED</option><option>CANCELED</option>
+        </select>
+      </label>
+      <button id="refresh">刷新</button>
+      <button id="pauseQueue">暂停队列</button>
+      <button id="resumeQueue">恢复队列</button>
+      <a class="nav" href="/hedge-dashboard">Dry-run Dashboard</a>
+      <span id="status">未连接</span>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <div>
+          <h2>创建并执行研究任务</h2>
+          <p>统一调度 Backtest / Optimization / FreqAI ML / RL。这里只允许研究命令，不允许 trade。</p>
+        </div>
+        <label class="switch"><input id="autoExecute" type="checkbox" checked> 创建后立即执行</label>
+      </div>
+      <div class="create-grid">
+        <label>任务类型
+          <select id="newKind">
+            <option>BACKTEST</option><option>OPTIMIZATION</option>
+            <option>ML_TRAIN</option><option>ML_EVAL</option>
+            <option>RL_TRAIN</option><option>RL_EVAL</option>
+          </select>
+        </label>
+        <label>名称<input id="newName" placeholder="BTC-1m-walkforward"></label>
+        <label>标签<input id="newTags" placeholder="btc,1m,research"></label>
+        <label>配置文件<input id="configPath" value="user_data/config.json" placeholder="user_data/config.json"></label>
+        <label>策略<input id="strategy" placeholder="MyHedgeStrategy"></label>
+        <label>Timerange<input id="timerange" placeholder="20240101-20260101"></label>
+        <label>Trials<input id="trials" type="number" min="1" value="100"></label>
+        <label>Workers<input id="workers" type="number" min="1" value="1"></label>
+        <label class="switch"><input id="autoReplayBest" type="checkbox"> Optimization 完成后自动 OOS 回测候选</label>
+        <label>自动回测 Top-N<input id="replayTopN" type="number" min="1" max="20" value="1"></label>
+        <label>候选回测 Timerange<input id="replayTimerange" placeholder="建议填独立 OOS，如 20260101-20260301"></label>
+        <label>最大运行秒数<input id="maxSeconds" type="number" min="1" value="3600"></label>
+        <label>优先级 0-100<input id="priority" type="number" min="0" max="100" value="50"></label>
+        <label>FreqAI Identifier<input id="freqaiIdentifier" placeholder="留空则按 Job 自动生成"></label>
+        <label>Train Period Days<input id="trainPeriodDays" type="number" min="1" placeholder="例如 60"></label>
+        <label>Backtest Period Days<input id="backtestPeriodDays" type="number" min="1" placeholder="例如 15"></label>
+        <label>训练设备<select id="trainingDevice"><option value="auto">AUTO</option><option value="cuda">CUDA / GPU</option><option value="cpu">CPU</option></select></label>
+        <label>CPU Threads<input id="cpuThreads" type="number" min="1" value="4"></label>
+        <label>GPU Device<input id="gpuDevice" type="number" min="0" value="0"></label>
+        <label>最小空闲显存 MB<input id="minGpuFreeMb" type="number" min="0" value="2048"></label>
+        <label class="switch"><input id="tensorboardEnabled" type="checkbox" checked> TensorBoard</label>
+      </div>
+      <details>
+        <summary>高级参数 JSON</summary>
+        <label class="block-label">会与上面的执行参数合并
+          <textarea id="newParameters" rows="5">{}</textarea>
+        </label>
+      </details>
+      <div class="action-row">
+        <button id="createJob">创建任务</button>
+        <span id="createStatus"></span>
+      </div>
+      <p class="note">执行器只生成和运行 argv 参数数组，不通过 shell；live order write 保持关闭。ML/RL 支持 AUTO / CUDA / CPU；CPU 与 GPU 使用独立训练槽位和资源预算。</p>
+    </section>
+
+    <section class="panel pipeline-panel">
+      <div class="section-title">
+        <div>
+          <h2>Experiment Pipeline / DAG</h2>
+          <p>一次定义 Optimization → Top-N OOS → ML/RL Walk-forward → Promotion。流水线只调度研究任务，最终最多生成 DRY_RUN_CANDIDATE。</p>
+        </div>
+        <label class="switch"><input id="pipelineAutoStart" type="checkbox" checked> 创建后启动</label>
+      </div>
+      <div class="create-grid pipeline-grid">
+        <label>Pipeline 名称<input id="pipelineName" placeholder="BTC-RL-pipeline"></label>
+        <label>配置文件<input id="pipelineConfigPath" value="user_data/config.json"></label>
+        <label>策略<input id="pipelineStrategy" placeholder="MyHedgeStrategy"></label>
+        <label>Optimization IS<input id="pipelineOptRange" placeholder="20240101-20260101"></label>
+        <label>独立 OOS<input id="pipelineOosRange" placeholder="20260101-20260301"></label>
+        <label>训练类型<select id="pipelineTrainingKind"><option>RL_TRAIN</option><option>ML_TRAIN</option></select></label>
+        <label>训练设备<select id="pipelineTrainingDevice"><option value="auto">AUTO</option><option value="cuda">CUDA / GPU</option><option value="cpu">CPU</option></select></label>
+        <label>CPU Threads<input id="pipelineCpuThreads" type="number" min="1" value="4"></label>
+        <label>WF 开始<input id="pipelineWfStart" value="20240101"></label>
+        <label>WF 结束<input id="pipelineWfEnd" value="20260101"></label>
+        <label>Train / Eval / Step<input id="pipelineWfDays" value="60/15/15"></label>
+        <label>Optimization Trials<input id="pipelineTrials" type="number" min="1" value="200"></label>
+        <label>Workers<input id="pipelineWorkers" type="number" min="1" value="1"></label>
+        <label>Top-N OOS<input id="pipelineTopN" type="number" min="1" max="20" value="5"></label>
+        <label>最大 Folds<input id="pipelineMaxFolds" type="number" min="1" value="50"></label>
+        <label>OOS 排名指标<input id="pipelineOosMetric" value="auto" placeholder="auto / sharpe / profit"></label>
+        <label>OOS 最低成功率<input id="pipelineOosSuccessRatio" type="number" min="0.01" max="1" step="0.01" value="1"></label>
+        <label>WF 稳健指标<input id="pipelineWfMetric" value="sharpe"></label>
+        <label>WF 最低成功率<input id="pipelineSuccessRatio" type="number" min="0.01" max="1" step="0.01" value="1"></label>
+        <label>稳定性惩罚<input id="pipelineStabilityPenalty" type="number" min="0" step="0.1" value="0.5"></label>
+        <label>Stage 自动重试<input id="pipelineRetries" type="number" min="0" max="10" value="1"></label>
+        <label class="switch"><input id="pipelineRequireApproval" type="checkbox"> OOS 后人工批准训练</label>
+      </div>
+      <div class="promotion-box">
+        <span>Pipeline Promotion Gate</span>
+        <input id="pipelineMinSharpe" type="number" step="0.01" placeholder="min sharpe">
+        <input id="pipelineMaxDrawdown" type="number" step="0.01" placeholder="max drawdown">
+        <input id="pipelineMinReward" type="number" step="0.01" placeholder="min reward">
+        <input id="pipelineMaxLoss" type="number" step="0.01" placeholder="max loss">
+        <input id="pipelineMinProfit" type="number" step="0.01" placeholder="min profit">
+      </div>
+      <details>
+        <summary>ML/RL 训练参数 JSON</summary>
+        <textarea id="pipelineTrainingParameters" rows="4">{}</textarea>
+      </details>
+      <div class="action-row">
+        <label class="switch"><input id="pipelineContinual" type="checkbox" checked> Continual Walk-forward</label>
+        <label class="switch"><input id="pipelineExpanding" type="checkbox"> Expanding</label>
+        <button id="createPipeline">创建 Pipeline</button>
+        <button id="refreshPipelines">刷新 Pipeline</button>
+        <span id="pipelineStatus"></span>
+      </div>
+      <div class="pipeline-layout">
+        <div id="pipelines" class="pipeline-list"></div>
+        <div id="pipelineDetail" class="pipeline-detail">选择 Pipeline 查看 DAG。</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <div>
+          <h2>Walk-forward 批任务</h2>
+          <p>复用上方任务类型、配置、策略和高级参数，自动拆分 OOS fold；ML/RL 会把训练窗口写入 FreqAI override。</p>
+        </div>
+        <label class="switch"><input id="wfAutoExecute" type="checkbox" checked> 创建后进入执行队列</label>
+      </div>
+      <div class="create-grid wf-grid">
+        <label>开始 YYYYMMDD<input id="wfStart" value="20240101"></label>
+        <label>结束 YYYYMMDD<input id="wfEnd" value="20260101"></label>
+        <label>训练天数<input id="wfTrainDays" type="number" min="1" value="60"></label>
+        <label>评估天数<input id="wfEvalDays" type="number" min="1" value="15"></label>
+        <label>步长天数<input id="wfStepDays" type="number" min="1" value="15"></label>
+        <label>最大 Fold<input id="wfMaxFolds" type="number" min="1" max="1000" value="50"></label>
+      </div>
+      <div class="action-row">
+        <label class="switch"><input id="wfExpanding" type="checkbox"> Expanding window</label>
+        <label class="switch"><input id="wfContinual" type="checkbox"> ML/RL 顺序 Continual Learning</label>
+        <button id="wfPreview">预览 Fold</button>
+        <button id="wfSubmit">创建 Walk-forward</button>
+        <span id="wfStatus"></span>
+      </div>
+      <pre id="wfPreviewOutput" class="compact-pre">尚未预览。</pre>
+      <div id="wfGroups" class="wf-groups"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><h2>研究任务</h2><span id="executorSummary"></span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>指标</th><th>Artifact</th><th>更新时间</th></tr></thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="panel">
+        <div class="section-title">
+          <h2>模型 / 实验排行榜</h2>
+          <div class="inline-controls">
+            <select id="leaderboardMetric"><option>sharpe</option><option>reward</option><option>profit</option><option>loss</option><option>drawdown</option></select>
+            <label class="switch"><input id="leaderboardMaximize" type="checkbox" checked> 越大越好</label>
+            <button id="refreshExperiments">刷新</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="compact-table">
+            <thead><tr><th>实验</th><th>类型</th><th>Identifier</th><th>分数</th><th>模型</th><th>操作</th></tr></thead>
+            <tbody id="experiments"></tbody>
+          </table>
+        </div>
+        <div class="promotion-box">
+          <span>Promotion Gate</span>
+          <input id="minSharpe" type="number" step="0.01" placeholder="min sharpe">
+          <input id="maxDrawdown" type="number" step="0.01" placeholder="max drawdown">
+          <input id="minReward" type="number" step="0.01" placeholder="min reward">
+          <input id="maxLoss" type="number" step="0.01" placeholder="max loss">
+          <input id="minProfit" type="number" step="0.01" placeholder="min profit">
+        </div>
+        <p id="experimentStatus" class="note">晋级只生成 DRY_RUN_CANDIDATE 配置，不启动 live。</p>
+        <div class="metric-head"><h3>TensorBoard Scalars</h3><select id="tbTag"></select></div>
+        <canvas id="tbChart" class="metric-chart" width="640" height="190"></canvas>
+      </div>
+      <div class="panel">
+        <div class="section-title"><h2>FreqAI 模型目录</h2><span id="modelSummary"></span></div>
+        <div id="models" class="model-list"></div>
+        <h3>Dry-run Candidates</h3>
+        <div id="promotions" class="model-list"></div>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="panel">
+        <h2>执行器 / 资源</h2>
+        <div id="resourceCards" class="resource-grid"></div>
+        <pre id="executor"></pre>
+      </div>
+      <div class="panel">
+        <h2>任务详情</h2>
+        <div id="detail">选择任务查看详情</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><h2>实时日志</h2><span id="logStatus">未选择任务</span></div>
+      <pre id="liveLog" class="live-log">选择任务后显示最近输出。</pre>
+    </section>
+
+    <section class="panel">
+      <h2>能力</h2>
+      <pre id="capabilities"></pre>
+    </section>
+  </main>
+  <script src="/hedge-research-dashboard/assets/app.js"></script>
+</body>
+</html>

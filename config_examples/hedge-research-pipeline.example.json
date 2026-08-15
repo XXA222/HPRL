@@ -1,0 +1,52 @@
+{
+  "name": "BTC-RL-research-pipeline",
+  "config_path": "user_data/config.json",
+  "strategy": "MyHedgeStrategy",
+  "optimization_timerange": "20240101-20260101",
+  "oos_timerange": "20260101-20260301",
+  "training_kind": "RL_TRAIN",
+  "walk_forward_start": "20240101",
+  "walk_forward_end": "20260101",
+  "train_days": 60,
+  "eval_days": 15,
+  "step_days": 15,
+  "trials": 200,
+  "workers": 1,
+  "top_n": 5,
+  "max_folds": 50,
+  "expanding": false,
+  "continual_learning": true,
+  "require_training_approval": true,
+  "priority": 60,
+  "max_seconds": 14400,
+  "max_artifact_bytes": 536870912,
+  "oos_metric": "auto",
+  "min_oos_success_ratio": 1.0,
+  "walk_forward_metric": "sharpe",
+  "min_walk_forward_success_ratio": 1.0,
+  "stability_penalty": 0.5,
+  "max_stage_retries": 1,
+  "training_parameters": {
+    "gpu_device": 0,
+    "min_gpu_free_mb": 2048,
+    "activate_tensorboard": true,
+    "training_device": "auto",
+    "cpu_threads": 4
+  },
+  "tags": [
+    "btc",
+    "rl",
+    "pipeline"
+  ],
+  "promotion_policy": {
+    "min_sharpe": 0.8,
+    "max_drawdown": 0.25,
+    "min_reward": null,
+    "max_loss": null,
+    "min_profit": 0.0,
+    "require_model_files": true
+  },
+  "auto_start": true,
+  "training_device": "auto",
+  "cpu_threads": 4
+}
