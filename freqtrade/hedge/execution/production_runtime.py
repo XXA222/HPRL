@@ -36,7 +36,9 @@ from .service import (
     RiskApprovalPort,
 )
 from .unknown_resolver import InMemoryUserStreamOrderCache, UnknownOrderResolver
+from .unknown_supervisor import UnknownOrderSupervisor
 from .user_stream_bridge import ExecutionUserStreamBridge
+from .state_machine import OrderState
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,7 @@ class ProductionExecutionRuntime:
     kill_switch: KillSwitch
     user_stream_bridge: ExecutionUserStreamBridge
     user_stream_cache: InMemoryUserStreamOrderCache
+    unknown_supervisor: UnknownOrderSupervisor
     cancel_replace: CancelReplaceCoordinator
     action_groups: ActionGroupExecutor
     audit: AuditPort
@@ -132,6 +135,20 @@ def build_production_execution_runtime(
         user_stream_cache=user_stream_cache,
         strict_dependencies=True,
     )
+    # Bind the supervisor to the production-facing engine rather than directly to the
+    # deterministic core.  Query-based UNKNOWN recovery then traverses the same position
+    # locks, execution transaction/outbox and telemetry path as normal runtime refreshes.
+    unknown_supervisor = UnknownOrderSupervisor(engine)
+    for durable_order in store.list_orders():
+        if durable_order.lifecycle.status is OrderState.UNKNOWN:
+            first_unknown_at = durable_order.lifecycle.updated_at
+            if first_unknown_at.year <= 1:
+                first_unknown_at = durable_order.created_at
+            unknown_supervisor.restore(
+                durable_order.client_order_id,
+                first_unknown_at=first_unknown_at,
+            )
+    engine.bind_unknown_supervisor(unknown_supervisor)
     bridge = ExecutionUserStreamBridge(
         engine=engine,
         cache=user_stream_cache,
@@ -145,6 +162,7 @@ def build_production_execution_runtime(
         kill_switch=kill_switch,
         user_stream_bridge=bridge,
         user_stream_cache=user_stream_cache,
+        unknown_supervisor=unknown_supervisor,
         cancel_replace=CancelReplaceCoordinator(core),
         action_groups=ActionGroupExecutor(engine, action_group_repository),
         audit=audit_log,

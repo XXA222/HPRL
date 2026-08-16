@@ -253,12 +253,20 @@ class ProductionEquivalentHedgeMainLoop:
         return current
 
     def run_cycle(
-        self, context: PlanningContext, *, strategy_allows_new_risk: bool = True
+        self,
+        context: PlanningContext,
+        *,
+        strategy_allows_new_risk: bool = True,
+        cycle_id_override: str | None = None,
     ) -> HedgeMainLoopCycle:
         symbol = raw_symbol(context.market.symbol)
         if symbol not in self.allowed_symbols:
             raise ValueError(f"symbol is not in the production perpetual allowlist: {symbol}")
-        cycle_id = _cycle_id(context, self.strategy_id)
+        cycle_id = (
+            _cycle_id(context, self.strategy_id)
+            if cycle_id_override is None
+            else _validated_cycle_id(cycle_id_override)
+        )
         if self.mode is HedgeExecutionMode.HEDGE_DISABLED:
             return HedgeMainLoopCycle(self.mode, symbol, cycle_id, None)
 
@@ -492,6 +500,20 @@ def _cycle_id(context: PlanningContext, strategy_id: str) -> str:
         f"{context.market.mark}|{context.long_signal}|{context.short_signal}"
     )
     return "cycle-" + sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def _validated_cycle_id(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("cycle_id_override must be a string")
+    result = value.strip()
+    if (
+        not result
+        or len(result) > 128
+        or not result.isascii()
+        or any(not (ch.isalnum() or ch in "-_.:") for ch in result)
+    ):
+        raise ValueError("cycle_id_override is invalid")
+    return result
 
 
 def _action_error(operation: str, reference: str, exc: Exception) -> LoopActionError:

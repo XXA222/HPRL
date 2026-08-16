@@ -324,6 +324,7 @@ def test_online_trainer_warmup_can_exceed_replay_capacity() -> None:
     env = VectorizedHedgeEnv(
         market_dataset(length=20),
         HPRLEnvironmentConfig(parallel_envs=4, action=HPRLActionConfig(max_step_change=1.0)),
+        device="cpu",
     )
     config = small_training(replay_capacity=16, warmup_steps=40)
     agent = FastTD3Agent(env.observation_dim, env.action_dim, config, device="cpu")
@@ -366,6 +367,7 @@ def test_online_summary_keeps_terminal_equity_after_group_reset() -> None:
             ),
             action=HPRLActionConfig(max_step_change=1.0),
         ),
+        device="cpu",
     )
     config = small_training(batch_size=16, replay_capacity=32)
     summary = OnlineTrainer(env, ConstantAgent(env.action_dim, (0.5, 0.0)), config).run(2)
@@ -546,6 +548,7 @@ def test_online_replay_stores_executed_not_raw_action() -> None:
                 max_increase_levels=4,
             ),
         ),
+        device="cpu",
     )
     config = small_training(batch_size=8, replay_capacity=16, warmup_steps=0)
     agent = ConstantAgent(env.action_dim, 1.0)
@@ -561,6 +564,7 @@ def test_warmup_actions_sample_canonical_tier_codes() -> None:
     env = VectorizedHedgeEnv(
         market_dataset(length=8, symbols=3),
         HPRLEnvironmentConfig(parallel_envs=64),
+        device="cpu",
     )
     config = small_training(batch_size=8, replay_capacity=128, warmup_steps=1000)
     trainer = OnlineTrainer(env, ConstantAgent(env.action_dim, 0.0), config)

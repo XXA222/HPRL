@@ -528,6 +528,7 @@ def test_cvar_history_is_independent_per_parallel_environment_after_reset() -> N
     env = VectorizedHedgeEnv(
         _market(length=12),
         HPRLEnvironmentConfig(parallel_envs=2),
+        device="cpu",
     )
     # Populate several negative-return observations for both rows.
     for _ in range(5):

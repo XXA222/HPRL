@@ -1,10 +1,11 @@
 """Two-hundred-point acceptance matrix for HPRL on Clean Mainline V1.2.1.
 
-The 200 points are deliberately non-duplicative at the reporting layer:
+The full 200-point mode is deliberately non-duplicative at the reporting layer:
 138 executable HPRL pytest cases, 41 byte-exact protected legacy-RL files, and 21
-Clean-Mainline GPU/integration/governance checks. The heavier stochastic semantic matrix used during
-adaptation is delivered separately as release evidence and is not persisted in the clean source
-tree.
+Clean-Mainline GPU/integration/governance checks. A dependency-light ``--source-only``
+mode executes the 41 protected-file plus 21 governance checks when pytest is intentionally
+absent from a runtime environment. Source-only mode reports 62/62 and never pretends to be
+a full 200/200 test run.
 """
 
 from __future__ import annotations
@@ -110,7 +111,27 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _collect_hprl_tests() -> tuple[list[str], set[str], str]:
+def _pytest_available() -> bool:
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("pytest") is not None
+    except Exception:
+        return False
+
+
+def _collect_hprl_tests() -> tuple[list[str], set[str], str, dict[str, object]]:
+    diagnostics: dict[str, object] = {
+        "pytest_available": _pytest_available(),
+        "collect_returncode": None,
+        "execute_returncode": None,
+        "collected": 0,
+        "selected": 0,
+        "recognition_mode": "not-run",
+    }
+    if not diagnostics["pytest_available"]:
+        return [], set(), "pytest is not installed in the selected Python runtime", diagnostics
+
     collect = _run(
         [
             sys.executable,
@@ -126,18 +147,27 @@ def _collect_hprl_tests() -> tuple[list[str], set[str], str]:
             "tests/hedge/hprl",
         ]
     )
+    diagnostics["collect_returncode"] = collect.returncode
     nodeids = [
         line.strip()
         for line in collect.stdout.splitlines()
         if line.startswith("tests/hedge/hprl/") and "::" in line
     ]
+    diagnostics["collected"] = len(nodeids)
     selected = nodeids[:EXPECTED_TESTS]
+    diagnostics["selected"] = len(selected)
+
+    if collect.returncode != 0 or len(selected) != EXPECTED_TESTS:
+        detail = (collect.stdout + collect.stderr)[-4000:]
+        return nodeids, set(), detail, diagnostics
+
     execute = _run(
         [
             sys.executable,
             "-m",
             "pytest",
             "-vv",
+            "--color=no",
             "-o",
             "addopts=",
             "-p",
@@ -146,13 +176,28 @@ def _collect_hprl_tests() -> tuple[list[str], set[str], str]:
             *selected,
         ]
     )
-    passed: set[str] = set()
-    for line in execute.stdout.splitlines():
-        if not line.startswith("tests/hedge/hprl/") or " PASSED" not in line:
-            continue
-        passed.add(line.split(" PASSED", 1)[0].strip())
-    detail = (collect.stdout + collect.stderr + execute.stdout + execute.stderr)[-3000:]
-    return nodeids, passed, detail
+    diagnostics["execute_returncode"] = execute.returncode
+
+    # Pytest's process return code is the authoritative suite result.  Terminal output
+    # is a human interface and changes between pytest/plugin versions; a successful
+    # subprocess means every selected nodeid passed.
+    if execute.returncode == 0:
+        diagnostics["recognition_mode"] = "process-returncode"
+        passed = set(selected)
+    else:
+        # On a real failure, retain best-effort per-node diagnostics.  ANSI/control
+        # sequences are stripped so this remains useful across pytest versions.
+        diagnostics["recognition_mode"] = "failure-output-fallback"
+        passed: set[str] = set()
+        ansi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+        for raw_line in execute.stdout.splitlines():
+            line = ansi.sub("", raw_line).strip()
+            if not line.startswith("tests/hedge/hprl/") or " PASSED" not in line:
+                continue
+            passed.add(line.split(" PASSED", 1)[0].strip())
+
+    detail = (collect.stdout + collect.stderr + execute.stdout + execute.stderr)[-4000:]
+    return nodeids, passed, detail, diagnostics
 
 
 def _source_text() -> str:
@@ -377,23 +422,34 @@ def _integration_checks() -> list[tuple[str, Callable[[], object]]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--source-only",
+        action="store_true",
+        help="run only 41 protected legacy-RL hashes plus 21 integration/governance checks",
+    )
     args = parser.parse_args()
     results: list[dict[str, object]] = []
+    pytest_diagnostics: dict[str, object] = {
+        "pytest_available": _pytest_available(),
+        "mode": "source-only" if args.source_only else "full",
+    }
 
-    nodeids, passed_nodeids, pytest_detail = _collect_hprl_tests()
-    if len(nodeids) != EXPECTED_TESTS:
-        nodeids = nodeids[:EXPECTED_TESTS]
-        while len(nodeids) < EXPECTED_TESTS:
-            nodeids.append(f"MISSING-HPRL-TEST-{len(nodeids) + 1}")
-    for nodeid in nodeids:
-        results.append(
-            {
-                "category": "pytest",
-                "name": nodeid,
-                "passed": nodeid in passed_nodeids,
-                "detail": "" if nodeid in passed_nodeids else pytest_detail,
-            }
-        )
+    if not args.source_only:
+        nodeids, passed_nodeids, pytest_detail, collected_diagnostics = _collect_hprl_tests()
+        pytest_diagnostics.update(collected_diagnostics)
+        if len(nodeids) != EXPECTED_TESTS:
+            nodeids = nodeids[:EXPECTED_TESTS]
+            while len(nodeids) < EXPECTED_TESTS:
+                nodeids.append(f"MISSING-HPRL-TEST-{len(nodeids) + 1}")
+        for nodeid in nodeids:
+            results.append(
+                {
+                    "category": "pytest",
+                    "name": nodeid,
+                    "passed": nodeid in passed_nodeids,
+                    "detail": "" if nodeid in passed_nodeids else pytest_detail,
+                }
+            )
 
     expected_hashes = _protected_hashes()
     for relative in sorted(expected_hashes):
@@ -429,23 +485,30 @@ def main() -> int:
     for index, row in enumerate(results, start=1):
         row["round"] = index
     passed_count = sum(bool(row["passed"]) for row in results)
+    expected_total = EXPECTED_PROTECTED + EXPECTED_INTEGRATION if args.source_only else EXPECTED_TOTAL
+    expected_pytest = 0 if args.source_only else EXPECTED_TESTS
     payload = {
-        "schema": "hprl-clean-mainline-adaptation-200-v1",
+        "schema": (
+            "hprl-clean-mainline-source-62-v1"
+            if args.source_only
+            else "hprl-clean-mainline-adaptation-200-v2"
+        ),
         "baseline": EXPECTED_VERSION,
-        "expected": EXPECTED_TOTAL,
+        "expected": expected_total,
         "executed": len(results),
         "passed": passed_count,
         "failed": len(results) - passed_count,
         "status": (
             "PASS"
-            if len(results) == EXPECTED_TOTAL and passed_count == EXPECTED_TOTAL
+            if len(results) == expected_total and passed_count == expected_total
             else "FAIL"
         ),
         "composition": {
-            "pytest": EXPECTED_TESTS,
+            "pytest": expected_pytest,
             "legacy_rl_hashes": EXPECTED_PROTECTED,
             "integration_governance": EXPECTED_INTEGRATION,
         },
+        "pytest_diagnostics": pytest_diagnostics,
         "rounds": results,
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

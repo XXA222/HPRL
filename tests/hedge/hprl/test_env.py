@@ -72,7 +72,7 @@ def test_hedged_long_short_can_coexist() -> None:
         parallel_envs=1,
         action=HPRLActionConfig(mode="continuous", max_step_change=1.0),
     )
-    env = VectorizedHedgeEnv(make_dataset(), cfg)
+    env = VectorizedHedgeEnv(make_dataset(), cfg, device="cpu")
     env.step(torch.tensor([[0.4, 0.2, 0.0, 0.0]]))
     position = env.position
     assert position[0, 0, 0] == pytest.approx(0.4)

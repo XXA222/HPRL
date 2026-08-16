@@ -96,6 +96,45 @@ class UnknownOrderSupervisor:
             self._records[key] = record
             return record
 
+    def restore(
+        self,
+        client_order_id: str,
+        *,
+        first_unknown_at: datetime,
+        attempts: int = 0,
+        last_message: str = "RESTORED_FROM_DURABLE_UNKNOWN_ORDER",
+    ) -> UnknownRecoveryRecord:
+        """Restore scheduling state from a durable UNKNOWN execution order on restart."""
+        if not isinstance(client_order_id, str) or not client_order_id.strip():
+            raise ValueError("client_order_id is required")
+        if first_unknown_at.tzinfo is None:
+            raise ValueError("first_unknown_at must be timezone-aware")
+        if attempts < 0:
+            raise ValueError("attempts must be nonnegative")
+        now = self._clock.now()
+        key = client_order_id.strip()
+        with self._lock:
+            current = self._records.get(key)
+            if current is not None:
+                return current
+            record = UnknownRecoveryRecord(
+                client_order_id=key,
+                state=UnknownRecoveryState.PENDING,
+                first_unknown_at=first_unknown_at.astimezone(UTC),
+                next_retry_at=now,
+                attempts=attempts,
+                last_message=last_message,
+            )
+            if self._expired(record, now):
+                record = replace(
+                    record,
+                    state=UnknownRecoveryState.HALTED,
+                    next_retry_at=None,
+                    last_message="RESTORED_UNKNOWN_ALREADY_EXPIRED",
+                )
+            self._records[key] = record
+            return record
+
     def get(self, client_order_id: str) -> UnknownRecoveryRecord | None:
         with self._lock:
             return self._records.get(client_order_id)

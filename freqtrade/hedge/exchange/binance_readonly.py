@@ -267,6 +267,8 @@ class AiohttpBinanceRestTransport:
         ("GET", "/fapi/v1/symbolConfig"),
         ("GET", "/fapi/v1/income"),
         ("GET", "/fapi/v1/exchangeInfo"),
+        ("GET", "/fapi/v1/premiumIndex"),
+        ("GET", "/fapi/v1/ticker/bookTicker"),
         ("GET", "/sapi/v1/account/apiRestrictions"),
         ("POST", "/fapi/v1/listenKey"),
         ("PUT", "/fapi/v1/listenKey"),
@@ -789,6 +791,28 @@ class BinanceReadonlyClient:
             + ",".join(report.reasons),
             payload=restrictions,
         )
+
+    async def fetch_real_market_prices(self, symbol: str) -> tuple[Decimal, Decimal, Decimal]:
+        """Return real Binance best bid/ask and mark using public read-only endpoints."""
+        normalized = to_binance_symbol(symbol)
+        book, premium = await asyncio.gather(
+            self.transport.request(
+                "GET", "/fapi/v1/ticker/bookTicker",
+                params={"symbol": normalized}, signed=False, weight=1,
+            ),
+            self.transport.request(
+                "GET", "/fapi/v1/premiumIndex",
+                params={"symbol": normalized}, signed=False, weight=1,
+            ),
+        )
+        if not isinstance(book.data, Mapping) or not isinstance(premium.data, Mapping):
+            raise BinanceDataError("public market endpoint returned invalid data")
+        bid = finite_decimal(book.data.get("bidPrice"), field="bookTicker.bidPrice")
+        ask = finite_decimal(book.data.get("askPrice"), field="bookTicker.askPrice")
+        mark = finite_decimal(premium.data.get("markPrice"), field="premiumIndex.markPrice")
+        if bid <= 0 or ask <= 0 or mark <= 0 or bid > ask:
+            raise BinanceDataError("public market endpoint returned invalid prices")
+        return bid, ask, mark
 
     async def fetch_account_info(self) -> Mapping[str, Any]:
         for path in ("/fapi/v3/account", "/fapi/v2/account"):

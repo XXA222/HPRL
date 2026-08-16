@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 from hashlib import sha256
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from freqtrade.hedge.contracts.events import FillEvent, OutboxEvent
 from freqtrade.hedge.contracts.ports import (
@@ -46,6 +46,14 @@ from .state_machine import OrderState
 from .unknown_resolver import UserStreamOrderCacheSinkPort
 
 
+class UnknownOrderSupervisorPort(Protocol):
+    """Minimal query-only UNKNOWN recovery coordinator owned by the runtime."""
+
+    def register(self, client_order_id: str) -> object: ...
+
+    def run_due(self) -> tuple[object, ...]: ...
+
+
 class HedgeExecutionEngine:
     """The production-facing execution entrypoint.
 
@@ -67,6 +75,7 @@ class HedgeExecutionEngine:
         publisher: EventPublisherPort | None = None,
         exchange: str = "binance",
         user_stream_cache: UserStreamOrderCacheSinkPort | None = None,
+        unknown_supervisor: UnknownOrderSupervisorPort | None = None,
         strict_dependencies: bool = False,
     ) -> None:
         if not isinstance(core, ExecutionService):
@@ -96,12 +105,41 @@ class HedgeExecutionEngine:
         self._publisher = publisher or NullEventPublisher()
         self._exchange = exchange.strip().lower()
         self._user_stream_cache = user_stream_cache
+        self._unknown_supervisor = unknown_supervisor
         if not self._exchange:
             raise ValueError("exchange is required")
 
     @property
     def core(self) -> ExecutionService:
         return self._core
+
+    @property
+    def unknown_supervisor(self) -> UnknownOrderSupervisorPort | None:
+        return self._unknown_supervisor
+
+    def bind_unknown_supervisor(self, supervisor: UnknownOrderSupervisorPort) -> None:
+        if supervisor is None:
+            raise TypeError("unknown supervisor is required")
+        register = getattr(supervisor, "register", None)
+        run_due = getattr(supervisor, "run_due", None)
+        if not callable(register) or not callable(run_due):
+            raise TypeError("unknown supervisor must expose register/run_due")
+        if self._unknown_supervisor is not None and self._unknown_supervisor is not supervisor:
+            raise RuntimeError("unknown supervisor is already bound")
+        self._unknown_supervisor = supervisor
+
+    def run_unknown_recovery(self) -> tuple[object, ...]:
+        """Run only query-based UNKNOWN recovery attempts; never resubmit an order."""
+        if self._unknown_supervisor is None:
+            return ()
+        return tuple(self._unknown_supervisor.run_due())
+
+    def _register_unknown(self, result: ExecutionResult) -> None:
+        if (
+            self._unknown_supervisor is not None
+            and result.order.lifecycle.status is OrderState.UNKNOWN
+        ):
+            self._unknown_supervisor.register(result.order.client_order_id)
 
     def position_key(self, intent: OrderIntent) -> PositionKey:
         exchange = str(intent.metadata.get("exchange", self._exchange))
@@ -140,6 +178,7 @@ class HedgeExecutionEngine:
         with self._position_lock.acquire(key):
             result = self._core.submit(normalized)
         self._record_result(result, previous=None, event_type="INTENT_EXECUTED")
+        self._register_unknown(result)
         return result
 
     def apply_exchange_event(self, snapshot: ExternalOrderSnapshot) -> ExecutionResult:

@@ -41,7 +41,7 @@ from .service import (
     OrderType,
     PositionSide,
 )
-from .state_machine import OrderState
+from .state_machine import OrderState, TERMINAL_STATES
 from freqtrade.hedge.exchange.shared_rate_limit import SqliteSharedWeightBudget
 
 
@@ -255,8 +255,8 @@ class BinanceUSDMExecutionAdapter(ExchangeExecutionPort):
         """
 
         self._gate.assert_order_allowed(approved)
-        params = self._new_order_params(approved)
         try:
+            params = self._new_order_params(approved)
             self._request_signed("POST", "/fapi/v1/order/test", params, write=True)
         except ExecutionWriteLockedError:
             raise
@@ -268,6 +268,10 @@ class BinanceUSDMExecutionAdapter(ExchangeExecutionPort):
             with self._lock:
                 self._definitive_write_errors += 1
             raise DefinitiveSubmissionError(_safe_error(exc)) from exc
+        finally:
+            release = getattr(self._gate, "release_canary_for_client", None)
+            if callable(release):
+                release(approved.client_order_id)
         return BinanceTestOrderValidation(
             client_order_id=approved.client_order_id,
             environment=self.environment,
@@ -291,19 +295,33 @@ class BinanceUSDMExecutionAdapter(ExchangeExecutionPort):
 
     def submit_order(self, approved: ApprovedOrderIntent) -> ExternalOrderSnapshot:
         self._gate.assert_order_allowed(approved)
-        params = self._new_order_params(approved)
         try:
+            params = self._new_order_params(approved)
             payload = self._request_signed("POST", "/fapi/v1/order", params, write=True)
+        except DefinitiveSubmissionError:
+            release = getattr(self._gate, "release_canary_for_client", None)
+            if callable(release):
+                release(approved.client_order_id)
+            raise
         except ExecutionWriteLockedError:
             raise
         except BinanceExecutionApiError as exc:
             if exc.ambiguous:
+                commit = getattr(self._gate, "commit_canary_for_client", None)
+                if callable(commit):
+                    commit(approved.client_order_id)
                 with self._lock:
                     self._ambiguous_write_errors += 1
                 raise TimeoutError("Binance submit outcome is unknown") from exc
+            release = getattr(self._gate, "release_canary_for_client", None)
+            if callable(release):
+                release(approved.client_order_id)
             with self._lock:
                 self._definitive_write_errors += 1
             raise DefinitiveSubmissionError(_safe_error(exc)) from exc
+        commit = getattr(self._gate, "commit_canary_for_client", None)
+        if callable(commit):
+            commit(approved.client_order_id)
         return self._snapshot_from_order(payload, expected_client_id=approved.client_order_id)
 
     def query_order(self, *, client_order_id: str) -> ExternalOrderSnapshot | None:
@@ -319,7 +337,12 @@ class BinanceUSDMExecutionAdapter(ExchangeExecutionPort):
             if exc.code in {-2013, -2011}:
                 return None
             raise
-        return self._snapshot_from_order(payload, expected_client_id=client_order_id)
+        snapshot = self._snapshot_from_order(payload, expected_client_id=client_order_id)
+        if snapshot.status in TERMINAL_STATES:
+            release = getattr(self._gate, "release_canary_for_client", None)
+            if callable(release):
+                release(client_order_id)
+        return snapshot
 
     def list_open_orders(
         self,
@@ -411,7 +434,12 @@ class BinanceUSDMExecutionAdapter(ExchangeExecutionPort):
             with self._lock:
                 self._definitive_write_errors += 1
             raise DefinitiveCancellationError(_safe_error(exc)) from exc
-        return self._snapshot_from_order(payload, expected_client_id=client_order_id)
+        snapshot = self._snapshot_from_order(payload, expected_client_id=client_order_id)
+        if snapshot.status in TERMINAL_STATES:
+            release = getattr(self._gate, "release_canary_for_client", None)
+            if callable(release):
+                release(client_order_id)
+        return snapshot
 
     def _new_order_params(self, approved: ApprovedOrderIntent) -> dict[str, Any]:
         intent = approved.intent

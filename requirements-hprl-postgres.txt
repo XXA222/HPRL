@@ -1,0 +1,3 @@
+# Optional PostgreSQL client dependency for HPRL Runtime Closure acceptance.
+# This is intentionally separate from core Freqtrade runtime dependencies.
+psycopg[binary]>=3.2
